@@ -80,6 +80,7 @@
   #menu .mbtn.sel { background: rgba(255,170,80,.34); border-color: #ffd9a0; color: #fff; box-shadow: 0 0 12px rgba(255,170,80,.45); }
   #menu .hint { margin-top: 9px; font-size: 11px; color: #9d8fb8; }
   body.menu-open #tLeft, body.menu-open #tRight, body.menu-open #tJump, body.menu-open #tThrow { visibility: hidden; }
+  body.cutscene #tLeft, body.cutscene #tRight, body.cutscene #tThrow { visibility: hidden; }
   @media (max-height: 520px) {  /* phones in landscape: stay clear of the top-right buttons */
     #menu { padding-top: calc(max(44px, env(safe-area-inset-top) + 40px) + 52px); padding-bottom: calc(env(safe-area-inset-bottom) + 8px); }
     #menu .panel { padding: 10px 14px 8px; } #menu h2 { font-size: 22px; } #menu p { margin-bottom: 8px; } }
@@ -491,12 +492,16 @@ const Sound = {
       case 'hiss': this.tone(900, 0.05, 'square', 0.07, 300); this.noise(0.6, 0.12, 4000, 0.02, 'highpass'); break;
       case 'squeak': this.tone(700, 0.18, 'sine', 0.09, 380); this.tone(380, 0.22, 'sine', 0.06, 260, 0.16); break;
       case 'pickup': [700, 950, 1250].forEach((f, i) => this.tone(f, 0.09, 'sine', 0.12, 0, i * 0.05)); break;
+      case 'clink': this.tone(1900, 0.06, 'triangle', 0.12); this.tone(2600, 0.12, 'triangle', 0.08, 0, 0.05); this.tone(1400, 0.18, 'square', 0.03, 0, 0.11); break;
+      case 'poof': this.noise(0.35, 0.1, 1500, 0, 'bandpass'); this.tone(300, 0.35, 'sine', 0.08, 760); break;
+      case 'kiss': this.tone(1100, 0.07, 'sine', 0.12, 1500); this.tone(1500, 0.1, 'sine', 0.08, 900, 0.08); [1320, 1760, 2093].forEach((f, i) => this.tone(f, 0.12, 'triangle', 0.06, 0, 0.22 + i * 0.07)); break;
+      case 'land': this.tone(260, 0.12, 'sine', 0.12, 180); break;
     }
   },
   /** Tiny spooky music-box waltz (Am F G E), scheduled slightly ahead. */
   scheduleMusic() {
     if (!this.ac || this.muted) { if (this.ac) this.musicNext = this.ac.currentTime + 0.1; return; }
-    const playing = (G.state === 'title' || G.state === 'playing' || G.state === 'dying') && !G.paused && !document.hidden;
+    const playing = (G.state === 'title' || G.state === 'playing' || G.state === 'dying' || G.state === 'cutscene') && !G.paused && !document.hidden;
     const stepLen = 0.21;
     if (this.musicNext < this.ac.currentTime) this.musicNext = this.ac.currentTime + 0.05;
     while (this.musicNext < this.ac.currentTime + 0.25) {
@@ -559,7 +564,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => { const k = KEYMAP[e.code]; if (k) { Input.keys[k] = false; e.preventDefault(); } });
 window.addEventListener('blur', () => { Input.keys.left = Input.keys.right = Input.keys.jump = Input.keys.throw = false; });
-document.addEventListener('visibilitychange', () => { if (document.hidden && G.state === 'playing' && !G.paused) { G.paused = true; openMenu('pause'); } });
+document.addEventListener('visibilitychange', () => { if (document.hidden && (G.state === 'playing' || G.state === 'cutscene') && !G.paused) { G.paused = true; openMenu('pause'); } });
 
 /* Touch: buttons are re-evaluated from ALL active touches on every touch event,
    so sliding a thumb from LEFT to RIGHT works and multitouch (run + jump) works. */
@@ -829,6 +834,7 @@ if ((('ontouchstart' in window) || navigator.maxTouchPoints > 0) && window.match
 
 function startGame() {
   G.lives = START_LIVES; G.score = 0; G.embers = 0; G.emberLife = 0; G.socks = 0; G.stats = { deaths: 0 };
+  G.rescued = false; G.bossHow = 'stomp';
   loadLevel(0);
 }
 function loadLevel(idx) {
@@ -855,6 +861,8 @@ function resetActors() {
   for (const [k, cr] of G.L.crumbles) G.L.grid[cr.r][cr.c] = '=';   // bone bridges regrow
   G.L.crumbles.clear();
   if (G.L.hasBoss) G.L.goalLocked = true;
+  G.princess = G.L.hasBoss ? makePrincess(G.L) : null;   // final level: a princess in a hanging cage
+  G.cut = null; G.cutPending = false;
   G.cam.x = clamp(G.player.x - W * 0.35, 0, G.L.w * T - W);
 }
 /** R key / restart button: restart the current level from its beginning, with lives,
@@ -875,7 +883,7 @@ function retryLevel() {
 }
 function togglePause() {
   if (G.rotateLock) return;
-  if (G.state !== 'playing' && G.state !== 'dying') return;
+  if (G.state !== 'playing' && G.state !== 'dying' && G.state !== 'cutscene') return;
   G.paused = !G.paused; Sound.sfx('pause');
   if (G.paused) openMenu('pause'); else G.menu = null;
 }
@@ -892,7 +900,7 @@ const CONFIRM_LINES = ['Every hero deserves a do-over. The dragons will pretend 
   'Rewind time? The lantern can do that. Mostly.', 'The dragons promise to forget everything. (They are lying.)',
   'Restart this level, or go all the way back to the meadow and its mild regret?'];
 let menuKey = null;
-const menuShown = () => G.paused && !G.rotateLock && (G.state === 'playing' || G.state === 'dying');
+const menuShown = () => G.paused && !G.rotateLock && (G.state === 'playing' || G.state === 'dying' || G.state === 'cutscene');
 const menuItems = () => MENUS[G.menu || 'pause'].items;
 function openMenu(kind) {
   G.menu = kind; G.menuSel = kind === 'confirm' ? 2 : 0;   // the safe choice (Cancel / Resume) starts selected
@@ -913,7 +921,8 @@ function moveMenuSel(d) { const n = menuItems().length; G.menuSel = (G.menuSel +
 /** Called every frame: shows/hides the restart button and keeps the DOM menu in sync with G. */
 function syncHud() {
   const active = (G.state === 'playing' || G.state === 'dying') && !G.rotateLock;
-  restartBtn.classList.toggle('hide', !active);
+  restartBtn.classList.toggle('hide', !active);          // hidden on title, game over, victory and during the rescue cutscene
+  document.body.classList.toggle('cutscene', G.state === 'cutscene');
   const kind = menuShown() ? (G.menu || 'pause') : '';
   const key = kind && [kind, G.menuText, G.touchMode].join('|');
   if (key !== menuKey) {
@@ -970,6 +979,7 @@ function killPlayer(cause) {
   G.state = 'dying'; G.deathT = 0; G.deathCause = cause; G.stats.deaths++;
   G.quip = levelLine('quips', cause, QUIPS[cause] || QUIPS.dragon);
   p.dead = true; p.vx = 0;
+  if (G.princess && G.princess.state === 'caged') princessSay(pick(PRINCESS_OOF), 'worried', 2.2);
   G.shake = 0.35;
   if (cause === 'fire' || cause === 'fireball') {
     p.charred = true; p.vy = -380; Sound.sfx('burn');
@@ -1013,9 +1023,11 @@ function update(dt) {
       if (Input.consumeJump()) startGame();
       break;
     case 'playing': updatePlaying(dt); break;
+    case 'cutscene': updateCutscene(dt); break;
     case 'dying': updateDying(dt); break;
     case 'clear':
       G.clearT += dt;
+      if (G.cut && G.cut.heart) G.cut.heart.t += dt;
       updateWorld(dt);
       if ((Input.consumeJump() && G.clearT > 1.0) || G.clearT > 6) nextLevel();
       break;
@@ -1038,6 +1050,7 @@ function updateParticles(dt) {
 
 function updatePlaying(dt) {
   const p = G.player, L = G.L;
+  if (G.cutPending && G.princess && !p.dead) { startCutscene(); return; }   // Old Smolder is down: rescue time
   const inp = { left: Input.left(), right: Input.right(), jumpHeld: Input.jumpHeld(), jumpPressed: Input.consumeJump() };
   p.prevBottom = p.y + p.h;
   const ev = {};
@@ -1161,6 +1174,7 @@ function updateWorld(dt) {
     else if (e.type === 'droop') updateDroop(e, dt, L);
     if (playing && G.state !== 'playing') return;
   }
+  updatePrincess(dt);
   G.enemies = G.enemies.filter((e) => e.alive || e.deadT < 2.5 || e.type === 'boss');
   // --- projectiles
   for (const f of G.projectiles) {
@@ -1211,6 +1225,9 @@ function updateBalloons(dt) {
       if (overlap(box, hb)) { hit = e; break; }
     }
     if (hit) { pop(true); balloonHit(hit, b); continue; }
+    if (G.princess && overlap(box, cageBox(G.princess))) {   // the cage is just scenery: splash, no harm done
+      pop(false); princessSay(pick(PRINCESS_SPLASHED), 'worried', 1.8); continue;
+    }
     // dragon fireballs and leaping lava blobs get put out
     const f = G.projectiles.find((q) => q.life > 0 && Math.hypot(q.x - b.x, q.y - b.y) < q.r + R);
     if (f) { f.life = 0; pop(true); floatText(b.x, b.y - 14, 'Fizzle!', '#c8e8ff', 12); addScore(25); continue; }
@@ -1250,6 +1267,7 @@ function balloonHit(e, b) {
       e.state = 'pace'; e.stateT = 0; e.vx = 0; G.shake = Math.max(G.shake, 0.12);
       burst(e.x + e.w / 2 + e.face * 50, e.y + 30, 16, ['#d8dde6', '#ffffff', '#aab2c0'], 60, 1.4, 'smoke', -40);
       floatText(e.x + e.w / 2, e.y - 34, 'Breath doused!', '#c8e8ff', 14); addScore(150);
+      if (e.wetHits + 1 < BALLOON.bossWet) princessSay(pick(PRINCESS_SPLASH), 'cheer', 1.6);
     }
     say(e, pick(BOSS_DOUSED), 2);
     e.wetHits = (e.wetHits || 0) + 1;
@@ -1455,10 +1473,197 @@ function bossDamage(b, how) {
   burst(bcx, b.y + 8, 16, how === 'stomp' ? ['#ffffff', '#ffe28a', '#ff9a3a'] : ['#ffffff', '#9ad8ff', '#d8dde6'], 160, 0.6, 'star', 200);
   if (b.hp <= 0) {
     b.state = 'dead'; b.alive = false; G.L.goalLocked = false; addScore(5000, bcx, b.y - 30);
+    G.bossHow = how; G.projectiles = [];
+    if (G.princess) G.cutPending = true;     // the rescue cutscene starts on the next step
     Sound.sfx('bossdown');
     say(b, how === 'stomp' ? 'Fine! FINE! Take the door! I\'m calling my lawyer-lizard.' : 'I\'m... DRENCHED. Fine. Take the door. I need a towel.', 3.5);
     floatText(G.L.goal.x + 16, G.L.goal.y - 90, 'The door creaks open!', '#9effb5', 15);
-  } else say(b, how === 'stomp' ? pick(BOSS_HURT) : 'That\'s FOUR balloons! My scales are PRUNY!', 1.8);
+  } else {
+    say(b, how === 'stomp' ? pick(BOSS_HURT) : 'That\'s FOUR balloons! My scales are PRUNY!', 1.8);
+    princessSay(pick(how === 'stomp' ? PRINCESS_STOMP : PRINCESS_SPLASH), 'cheer', 1.8);
+  }
+}
+/* ---- The princess in the hanging cage (final level) + the rescue cutscene ---- */
+const PRINCESS_HELLO = ['Psst! Up here! Mind the big snoring one.', 'Oh! A knight! A small one, but a knight!'];
+const PRINCESS_STOMP = ['Bonk him!', 'Right on the noggin!', 'Again! Again!', 'That\'s my knight! (Probably.)'];
+const PRINCESS_SPLASH = ['Splash him!', 'Ha! Soggy lizard!', 'Bath time, Smolder!'];
+const PRINCESS_WORRY = ['Mind the moustache... er, the fire!', 'Eek! Hot hot hot!', 'Duck! Or jump! One of those!'];
+const PRINCESS_YAWN = ['*yawn* ...any day now, sir knight.', 'I counted the bars. Twice. It\'s still eight.', 'Still here. Still caged. Still fabulous.'];
+const PRINCESS_OOF = ['Oh no! ...walk it off, sir knight!', 'Ooh. That looked crunchy.', 'Helmets are replaceable! Probably!'];
+const PRINCESS_SPLASHED = ['Hey! I\'m the one being RESCUED!', 'My hair! I JUST did my hair!'];
+/** Cutscene timeline (seconds). Total about 8-10s; skippable with jump/tap after `skipAfter`. */
+const CUT = { skipAfter: 1.0, open: 1.2, step: 1.55, puff: 1.95, floatVy: 105, kissDelay: 0.45, line2: 1.55, walkDelay: 2.7, walkMax: 1.6, end: 13 };
+function makePrincess(L) {
+  const s = L.spawns.find((q) => q.type === 'S');
+  if (!s) return null;
+  const cx = s.c * T + T / 2 + 40;   // above Old Smolder's patch of floor, well out of reach
+  const pr = Object.assign(makePlayer(cx - 11, 80), { type: 'princess', w: 22, h: 30, face: -1, state: 'caged', puff: 0, lean: 0,
+    mood: 'idle', moodT: 0, idleT: 0, worryCd: 0, t: 0, hello: false });
+  // cage geometry is local to the chain anchor (rotated by the sway): ring at y=110, dome 117-137, bars 137-181
+  pr.cage = { cx, anchorY: -70, ring: 110, w: 56, door: 0, sway: 0, jolt: 0 };
+  return pr;
+}
+const CAGE_FLOOR = 180;   // princess feet, in cage-local coordinates
+function cagePoint(pr, lx, ly) {
+  const c = pr.cage, a = c.sway;
+  return { x: c.cx + lx * Math.cos(a) - ly * Math.sin(a), y: c.anchorY + lx * Math.sin(a) + ly * Math.cos(a) };
+}
+function cageBox(pr) { const c = pr.cage; return { x: c.cx - c.w / 2 - 3, y: c.anchorY + c.ring, w: c.w + 6, h: 82 }; }
+function princessSay(str, mood, life = 1.8) {
+  const pr = G.princess; if (!pr) return;
+  say(pr, str, life); pr.mood = mood; pr.moodT = life; pr.idleT = 0;
+}
+function updatePrincess(dt) {
+  const pr = G.princess; if (!pr) return;
+  const c = pr.cage, p = G.player;
+  pr.t += dt; pr.moodT -= dt; pr.worryCd -= dt;
+  c.door = pr.state === 'caged' ? 0 : Math.min(1, c.door + dt * 4);
+  c.jolt = Math.max(0, c.jolt - dt * 0.8);
+  c.sway = Math.sin(pr.t * 1.3) * 0.045 + Math.sin(pr.t * 11) * 0.07 * c.jolt;
+  if (pr.state !== 'caged' && pr.state !== 'opening') return;
+  const f = cagePoint(pr, 0, CAGE_FLOOR);
+  pr.x = f.x - pr.w / 2; pr.y = f.y - pr.h;
+  if (pr.state === 'opening') return;
+  pr.face = p.x + p.w / 2 < c.cx ? -1 : 1;
+  const boss = G.enemies.find((e) => e.type === 'boss');
+  const awake = boss && boss.alive && boss.state !== 'sleep';
+  if (pr.moodT <= 0) pr.mood = awake ? 'worried' : 'idle';
+  if (G.state !== 'playing' || p.dead) return;
+  const near = Math.abs(p.x - c.cx) < 560;
+  if (!near) { pr.idleT = 0; return; }
+  if (!pr.hello) { pr.hello = true; princessSay(pick(PRINCESS_HELLO), 'cheer', 2.4); return; }
+  if (awake && boss.state === 'breathe' && boss.stateT === 0 && pr.worryCd <= 0) { pr.worryCd = 5; princessSay(pick(PRINCESS_WORRY), 'worried', 1.8); return; }
+  pr.idleT += dt;
+  if (pr.idleT > 9) princessSay(pick(PRINCESS_YAWN), 'yawn', 2.4);
+}
+/** First standable surface (solid or plank) at or below y in the column under x. */
+function groundBelow(x, y) {
+  const c = Math.floor(x / T);
+  for (let r = Math.max(0, Math.floor(y / T)); r < G.L.h; r++) { const ch = tileAt(G.L, c, r); if (isSolid(ch) || isOneWay(ch)) return r * T; }
+  return null;
+}
+/** Where the princess lands: right beside the hero, on the same floor (cage side first). */
+function princessLandSpot() {
+  const p = G.player, pr = G.princess, foot = p.y + p.h, pcx = p.x + p.w / 2;
+  const boss = G.enemies.find((e) => e.type === 'boss');
+  const bx = boss ? boss.x + boss.w / 2 : null;
+  // land on the side away from Old Smolder's sulking bulk if he's close; otherwise on the cage side
+  const pref = bx !== null && Math.abs(bx - pcx) < 130 ? (bx > pcx ? -1 : 1) : (pr.cage.cx >= pcx ? 1 : -1);
+  for (const side of [pref, -pref]) {
+    const x = pcx + side * 30, gy = groundBelow(x, foot - 4);
+    if (gy !== null && Math.abs(gy - foot) < 3 && groundBelow(x - 9, foot - 4) === gy && groundBelow(x + 9, foot - 4) === gy) return { x, gy, side };
+  }
+  const x = pcx + pref * 30, gy = groundBelow(x, foot - 4);
+  return { x, gy: gy === null ? foot : gy, side: pref };
+}
+function startCutscene() {
+  const p = G.player;
+  G.cutPending = false; G.state = 'cutscene';
+  G.cut = { t: 0, phase: 'cheer', spot: null, landT: 0, kissT: 0, walkT: 0, heart: null, kissed: false, line2: false, skipped: false };
+  G.projectiles = []; G.balloons = []; G.throwBuf = 0;
+  Input.jumpQueued = false; Input.throwQueued = false;
+  p.invuln = 0;
+  princessSay('He did it! My hero! (Is that a lantern?)', 'cheer', 1.7);
+}
+function kiss() {
+  const c = G.cut, p = G.player, pr = G.princess;
+  c.kissed = true; c.kissT = c.t; p.blush = true;
+  const mx = (p.x + p.w / 2 + pr.x + pr.w / 2) / 2;
+  c.heart = { x: mx, y: Math.min(p.y, pr.y) - 10, t: 0 };
+  pr.mood = 'kiss'; pr.moodT = 0.7;
+  Sound.sfx('kiss');
+  burst(mx, c.heart.y + 6, 12, ['#ff7aa8', '#ffd0e8', '#ffffff'], 90, 0.8, 'star', 0);
+}
+function updateCutscene(dt) {
+  const c = G.cut, p = G.player, pr = G.princess, L = G.L, cg = pr.cage;
+  c.t += dt;
+  Input.throwQueued = false;
+  if (Input.consumeJump() && c.t > CUT.skipAfter) { finishCutscene(true); return; }   // (presses in the first second are ignored)
+  // the hero is on autopilot: no player input at all
+  const toDoor = Math.sign(L.goal.x + T / 2 - (p.x + p.w / 2)) || 1;
+  const heroIn = { left: c.phase === 'walk' && toDoor < 0, right: c.phase === 'walk' && toDoor > 0, jumpPressed: false, jumpHeld: false };
+  p.prevBottom = p.y + p.h;
+  stepPlayer(p, heroIn, dt, L, {});
+  if (p.onGround && Math.abs(p.vx) > 10) p.walkT += dt * Math.abs(p.vx) / 15;
+  p.squash = lerp(p.squash, 1, Math.min(1, dt * 12));
+  updateWorld(dt);
+  if (c.phase === 'cheer' && c.t >= CUT.open) {          // *clink*: the cage door pops open
+    c.phase = 'open'; pr.state = 'opening'; cg.jolt = 1; Sound.sfx('clink');
+    const d = cagePoint(pr, 0, 159);
+    burst(d.x, d.y, 12, ['#ffe6a8', '#ffffff', '#d0a848'], 100, 0.5, 'star', 0);
+    floatText(d.x, d.y - 40, '*clink!*', '#ffe6a8', 13);
+  }
+  if (c.phase === 'open' && c.t >= CUT.step) {           // she hops out of the door...
+    c.phase = 'step'; pr.state = 'out'; pr.vy = -110; pr.vx = 0; pr.mood = 'cheer'; pr.moodT = 9;
+  }
+  if (pr.state === 'out') { pr.vy += 700 * dt; pr.y += pr.vy * dt; }
+  if (c.phase === 'step' && c.t >= CUT.puff) {           // ...and her big poofy dress becomes a parachute
+    c.phase = 'float'; pr.state = 'float'; Sound.sfx('poof');
+    princessSay('Wheee! ...I mean: ahem. Graceful descent.', 'cheer', 2.4);
+    burst(pr.x + pr.w / 2, pr.y - 6, 14, ['#ffd0e8', '#ffffff', '#e872ac'], 110, 0.6, 'star', 0);
+  }
+  if (pr.state === 'float') {
+    c.spot = princessLandSpot();
+    pr.puff = Math.min(1, pr.puff + dt / 0.35);
+    pr.vy = lerp(pr.vy, CUT.floatVy, Math.min(1, dt * 4));
+    pr.y += pr.vy * dt;
+    const tx = c.spot.x - pr.w / 2;
+    pr.x += clamp((tx - pr.x) * dt * 1.6, -110 * dt, 110 * dt);
+    pr.face = Math.sign(p.x - pr.x) || pr.face;
+    if (Math.random() < dt * 14) addParticle(pr.x + pr.w / 2 + rnd(-28, 28), pr.y - 30 + rnd(-14, 10), rnd(-10, 10), rnd(10, 30), 0.9, pick(['#ffe6a8', '#ffd0e8', '#ffffff']), 2.2, 'star', 0);
+    if (pr.y + pr.h >= c.spot.gy) {                      // touchdown, right next to the hero
+      pr.y = c.spot.gy - pr.h; pr.x = tx; pr.vy = 0; pr.state = 'landed'; pr.onGround = true;
+      c.phase = 'landed'; c.landT = c.t; Sound.sfx('land');
+      G.speech = G.speech.filter((q) => q.ent !== pr);   // clear the stage for the kiss
+      burst(pr.x + pr.w / 2, c.spot.gy, 6, ['#8a7a9a', '#ffd0e8'], 50, 0.4, 'dust', 0);
+    }
+  }
+  if (pr.state === 'landed' || pr.state === 'walk') pr.puff = Math.max(0, pr.puff - dt / 0.3);
+  if (c.phase === 'landed') {                            // the hero turns to face her; she leans in for a quick peck
+    p.face = Math.sign(pr.x - p.x) || p.face; pr.face = -p.face;
+    const k = c.t - c.landT;
+    pr.lean = clamp((k - CUT.kissDelay) / 0.25, 0, 1);
+    if (k >= CUT.kissDelay + 0.25 && !c.kissed) kiss();
+  }
+  if (c.heart) c.heart.t += dt;
+  if (c.kissed && !c.skipped) {
+    const k = c.t - c.kissT;
+    p.helmetHop = k < 0.5 ? Math.sin(Math.PI * k / 0.5) * 7 : 0;   // helmet jumps, plume stands straight up
+    p.plumeUp = k < 2.6;
+    if (k > 0.45) pr.lean = Math.max(0, pr.lean - dt * 4);
+    if (k < 1.3 && Math.random() < dt * 10) addParticle(p.x + p.w / 2 + p.face * 6, p.y - 2, rnd(-8, 8), rnd(-30, -12), 0.8, '#e8f0ff', rnd(2, 3.5), 'smoke', -10);
+    if (k >= 0.55 && !c.line1) { c.line1 = true; say(p, '...my helmet is fogging up.', 1.0); }
+    if (k >= CUT.line2 && !c.line2) { c.line2 = true; G.speech = G.speech.filter((q) => q.ent !== p); princessSay('You\'re shorter than the portraits suggested. I like it.', 'happy', 2.6); }
+    if (k >= CUT.walkDelay && c.phase !== 'walk') { c.phase = 'walk'; c.walkT = c.t; pr.state = 'walk'; }
+  }
+  if (c.phase === 'walk') {                              // off they go, together, to the HOME door
+    const gx = L.goal.x + T / 2, pcx = pr.x + pr.w / 2, dir = Math.sign(gx - pcx), near = Math.abs(gx - pcx) < 24;
+    pr.prevBottom = pr.y + pr.h;
+    stepPlayer(pr, { left: !near && dir < 0, right: !near && dir > 0, jumpPressed: false, jumpHeld: false }, dt, L, {});
+    if (Math.abs(pr.vx) > 5) { pr.face = Math.sign(pr.vx); pr.walkT += dt * Math.abs(pr.vx) / 15; }
+    if (overlap(p, goalRect(L)) || c.t - c.walkT > CUT.walkMax) { finishCutscene(false); return; }
+  }
+  // camera keeps the hero and the princess (or her cage) in frame
+  const fx = pr.state === 'caged' || pr.state === 'opening' ? cg.cx : pr.x + pr.w / 2;
+  G.cam.x = lerp(G.cam.x, clamp((p.x + p.w / 2 + fx) / 2 - W / 2, 0, L.w * T - W), Math.min(1, dt * 3));
+  if (c.t > CUT.end) finishCutscene(false);
+}
+/** Ends the cutscene (skip = jump straight to the happy ending) and shows LEVEL CLEARED -> victory. */
+function finishCutscene(skipped) {
+  const c = G.cut, p = G.player, pr = G.princess;
+  if (skipped) {
+    c.skipped = true; G.speech = [];
+    if (pr.state !== 'landed' && pr.state !== 'walk') {
+      c.spot = princessLandSpot(); pr.x = c.spot.x - pr.w / 2; pr.y = c.spot.gy - pr.h; pr.vy = 0;
+    }
+    pr.state = 'landed'; pr.puff = 0; pr.lean = 0;
+    p.face = Math.sign(pr.x - p.x) || 1; pr.face = -p.face; p.helmetHop = 0; p.plumeUp = true;
+    if (!c.kissed) kiss();
+    say(p, '...my helmet is fogging up.', 1.6);
+    pr.mood = 'happy'; pr.moodT = 99;
+  }
+  c.done = true; G.rescued = true;
+  levelClear();
 }
 function bumpBlocks(cells) {
   const p = G.player, pcx = p.x + p.w / 2;
@@ -2019,15 +2224,18 @@ function drawHero(p, t) {
     ctx.fillStyle = '#3a2a20'; circle(ctx, 2, hy + 2, 1.2); circle(ctx, 5, hy + 2, 1.2);
     ctx.strokeStyle = '#3a2a20'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(4, hy + 6, 1.6, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = '#6a4a2a'; ctx.beginPath(); ctx.moveTo(-5, hy - 1); ctx.lineTo(0, hy - 7); ctx.lineTo(3, hy - 3); ctx.closePath(); ctx.fill();
-  } else drawHelmet(ctx, 0, hy, C, t, p.charred);
+  } else drawHelmet(ctx, 0, hy - (p.helmetHop || 0), C, t, p.charred, p);
   ctx.restore();
 }
-function drawHelmet(g, x, y, C, t, charred) {
+function drawHelmet(g, x, y, C, t, charred, fx) {
   const grd = g.createRadialGradient(x - 4, y - 5, 1, x, y, 12);
   grd.addColorStop(0, C.m1); grd.addColorStop(1, C.m2);
   g.fillStyle = C.plume;
   const w = Math.sin(t * 5) * 2;
-  g.beginPath(); g.moveTo(x - 1, y - 10); g.quadraticCurveTo(x - 6, y - 20 + w, x - 15, y - 15 + w); g.quadraticCurveTo(x - 8, y - 13, x - 4, y - 8); g.closePath(); g.fill();
+  if (fx && fx.plumeUp) { // smitten: plume stands bolt upright (and quivers)
+    const q = Math.sin(t * 45) * 0.8;
+    g.beginPath(); g.moveTo(x - 3, y - 9); g.quadraticCurveTo(x - 5 + q, y - 20, x - 1 + q, y - 29); g.quadraticCurveTo(x + 2 + q, y - 20, x + 1, y - 9); g.closePath(); g.fill();
+  } else { g.beginPath(); g.moveTo(x - 1, y - 10); g.quadraticCurveTo(x - 6, y - 20 + w, x - 15, y - 15 + w); g.quadraticCurveTo(x - 8, y - 13, x - 4, y - 8); g.closePath(); g.fill(); }
   g.fillStyle = grd; circle(g, x, y, 11);
   g.strokeStyle = '#4a4760'; g.lineWidth = 1.2; g.beginPath(); g.arc(x, y, 11, 0, Math.PI * 2); g.stroke();
   g.strokeStyle = 'rgba(255,255,255,0.55)'; g.beginPath(); g.arc(x, y, 8, Math.PI * 1.1, Math.PI * 1.5); g.stroke();
@@ -2035,7 +2243,131 @@ function drawHelmet(g, x, y, C, t, charred) {
   // visor slit + glowing eyes looking where you're going
   g.fillStyle = '#16121f'; rrect(g, x - 2, y - 3, 12, 6, 3); g.fill();
   const blink = Math.floor(t * 10) % 41 === 0;
-  if (!blink) { g.fillStyle = charred ? '#ffffff' : '#ffd96b'; circle(g, x + 3, y, 1.6); circle(g, x + 7.5, y, 1.6); }
+  if (fx && fx.blush) { // fogged-up visor, heart eyes, rosy cheeks
+    g.fillStyle = 'rgba(225,235,255,0.55)'; rrect(g, x - 2, y - 3, 12, 6, 3); g.fill();
+    g.fillStyle = '#ff6a9a';
+    for (const ex of [x + 3, x + 7.5]) { g.beginPath(); g.moveTo(ex, y + 1.6); g.bezierCurveTo(ex - 2.6, y - 0.6, ex - 1.4, y - 2.6, ex, y - 1.1); g.bezierCurveTo(ex + 1.4, y - 2.6, ex + 2.6, y - 0.6, ex, y + 1.6); g.fill(); }
+    g.fillStyle = 'rgba(255,110,160,0.7)'; ellipse(g, x + 1, y + 6, 2.6, 1.5); ellipse(g, x + 9, y + 5.5, 2.6, 1.5);
+  } else if (!blink) { g.fillStyle = charred ? '#ffffff' : '#ffd96b'; circle(g, x + 3, y, 1.6); circle(g, x + 7.5, y, 1.6); }
+}
+/** The princess: cute, round, tiara, very big poofy dress (which doubles as a parachute). x = centre, by = feet. */
+function drawPrincess(x, by, t, o = {}) {
+  const g = ctx, puff = o.puff || 0, mood = o.mood || 'idle', lean = o.lean || 0;
+  const DRESS = '#e872ac', DRESS_D = '#b8487f', TRIM = '#fff0f8', SKIN = '#f6dcc4', HAIR = '#f4bf52', HAIR_D = '#c98a2a', GOLD = '#ffd45a';
+  g.save(); g.translate(x, by);
+  if (o.rot) g.rotate(o.rot);
+  g.scale(o.face || 1, 1);
+  g.rotate(lean * 0.22);                       // leaning in for the peck (pivot at her feet)
+  const br = Math.sin(t * 2.4) * 0.6;
+  if (puff > 0.02) {                            // the dress flipped up into a canopy
+    g.save(); g.translate(0, -17); g.scale(0.35 + 0.65 * puff, puff);
+    g.strokeStyle = TRIM; g.lineWidth = 1.1;
+    for (const sx of [-26, -10, 10, 26]) { g.beginPath(); g.moveTo(sx * 0.12, 0); g.lineTo(sx, -26); g.stroke(); }
+    g.fillStyle = DRESS; g.beginPath(); g.moveTo(-30, -26); g.bezierCurveTo(-31, -66, 31, -66, 30, -26);
+    for (let i = 0; i < 6; i++) { const x0 = 30 - i * 10; g.quadraticCurveTo(x0 - 5, -19, x0 - 10, -26); }
+    g.closePath(); g.fill();
+    g.strokeStyle = DRESS_D; g.lineWidth = 1.5;
+    for (const k of [-0.5, 0, 0.5]) { g.beginPath(); g.moveTo(k * 56, -25); g.quadraticCurveTo(k * 40, -48, 0, -55); g.stroke(); }
+    g.fillStyle = TRIM; for (const [dx, dy] of [[-18, -38], [6, -46], [18, -33], [-4, -33], [-12, -49]]) circle(g, dx, dy, 1.8);
+    for (let i = 0; i < 6; i++) circle(g, 25 - i * 10, -24.5, 2.2);
+    g.restore();
+  }
+  // legs + little shoes (bloomers show when the skirt is up)
+  g.fillStyle = SKIN; g.fillRect(-4, -6, 3, 5); g.fillRect(1, -6, 3, 5);
+  g.fillStyle = DRESS_D; ellipse(g, -2.5, -1, 3, 1.8); ellipse(g, 3, -1, 3, 1.8);
+  if (puff > 0.3) { g.fillStyle = TRIM; ellipse(g, 0, -11, 7, 5.5); g.fillStyle = 'rgba(232,114,172,0.6)'; for (let i = -1; i <= 1; i++) circle(g, i * 4, -7, 1.5); }
+  const sk = 1 - puff;                          // the big poofy skirt (shrinks as it turns into the parachute)
+  if (sk > 0.02) {
+    const hw = 15 * (0.4 + 0.6 * sk), hem = -2 - (1 - sk) * 10;
+    g.fillStyle = TRIM; for (let i = -3; i <= 3; i++) circle(g, i * hw / 3.3, hem + 1, 2.6);
+    g.fillStyle = DRESS; g.beginPath(); g.moveTo(-5, -17); g.quadraticCurveTo(-hw - 3, -12 + br, -hw, hem);
+    for (let i = 0; i < 5; i++) { const x0 = -hw + i * (2 * hw / 5); g.quadraticCurveTo(x0 + hw / 5, hem + 3.5, x0 + 2 * hw / 5, hem); }
+    g.quadraticCurveTo(hw + 3, -12 + br, 5, -17); g.closePath(); g.fill();
+    g.strokeStyle = DRESS_D; g.lineWidth = 1.2;
+    g.beginPath(); g.moveTo(-hw * 0.55, hem); g.quadraticCurveTo(-hw * 0.5, -10, -2.5, -16); g.moveTo(hw * 0.55, hem); g.quadraticCurveTo(hw * 0.5, -10, 2.5, -16); g.stroke();
+    g.fillStyle = TRIM; for (const [dx, dy] of [[-8, -6], [7, -8], [0, -4], [-3, -11], [9, -3]]) circle(g, dx * hw / 15, dy, 1.3);
+  }
+  // bodice, ribbon, puffy sleeves
+  g.fillStyle = DRESS_D; rrect(g, -5, -23 + br * 0.3, 10, 8, 3); g.fill();
+  g.fillStyle = TRIM; g.fillRect(-5, -17.5, 10, 1.5);
+  g.fillStyle = DRESS; circle(g, -5.5, -21, 3); circle(g, 5.5, -21, 3);
+  // arms (pose by mood)
+  g.strokeStyle = SKIN; g.lineWidth = 2.4; g.lineCap = 'round';
+  const arm = (sx, ex, ey) => { g.beginPath(); g.moveTo(sx, -20); g.lineTo(ex, ey); g.stroke(); g.fillStyle = SKIN; circle(g, ex, ey, 1.6); };
+  if (puff > 0.5) { arm(-6, -9, -31); arm(6, 9, -31); }
+  else if (mood === 'cheer') { const w = Math.sin(t * 14) * 2; arm(-6, -11, -31 + w); arm(6, 11, -31 - w); }
+  else if (mood === 'worried') { arm(-6, 0, -24); arm(6, 2, -24.5); }
+  else if (mood === 'yawn') { arm(-6, -9, -12); arm(6, 5.5, -25.5); }
+  else if (mood === 'kiss') { arm(-6, -8, -14); arm(6, 1, -15); }
+  else { arm(-6, -9, -13); arm(6, 9, -13); }
+  // head, hair, tiara
+  const hy = -30 + br * 0.3;
+  g.fillStyle = HAIR_D; ellipse(g, -2, hy + 2, 10, 10);
+  g.fillStyle = HAIR; ellipse(g, -6.5, hy + 7, 4, 6);
+  g.fillStyle = SKIN; circle(g, 1, hy, 8);
+  g.fillStyle = HAIR; g.beginPath(); g.arc(1, hy - 0.5, 8.4, Math.PI * 1.02, Math.PI * 1.98); g.quadraticCurveTo(3, hy - 3, -7.2, hy + 1); g.closePath(); g.fill();
+  g.fillStyle = GOLD; g.beginPath(); g.moveTo(-4.5, hy - 7); g.lineTo(-3.5, hy - 12); g.lineTo(-1, hy - 9); g.lineTo(1.5, hy - 14.5); g.lineTo(4, hy - 9); g.lineTo(6.5, hy - 12); g.lineTo(7, hy - 7); g.closePath(); g.fill();
+  g.fillStyle = '#ff5a9a'; circle(g, 1.5, hy - 9.5, 1.4);
+  // face: looks where she faces (like the knight's eyes)
+  const ey = hy + 0.5, blink = Math.floor(t * 9 + 3) % 37 === 0;
+  g.strokeStyle = '#3a2030'; g.lineWidth = 1.2;
+  if (mood === 'happy' || mood === 'kiss') { for (const ex of [2, 6.2]) { g.beginPath(); g.arc(ex, ey + 1, 1.6, Math.PI * 1.15, Math.PI * 1.85); g.stroke(); } }
+  else if (mood === 'yawn' || blink) { g.beginPath(); g.moveTo(0.6, ey); g.lineTo(3.4, ey); g.moveTo(4.8, ey); g.lineTo(7.6, ey); g.stroke(); }
+  else { g.fillStyle = '#2a1830'; ellipse(g, 2, ey, 1.5, 2.1); ellipse(g, 6.2, ey, 1.5, 2.1); g.fillStyle = '#fff'; circle(g, 2.5, ey - 0.8, 0.6); circle(g, 6.7, ey - 0.8, 0.6); }
+  if (mood === 'worried') { g.beginPath(); g.moveTo(0.4, ey - 3.2); g.lineTo(3.2, ey - 4.2); g.moveTo(7.8, ey - 3.2); g.lineTo(5, ey - 4.2); g.stroke(); }
+  g.fillStyle = 'rgba(255,110,150,0.55)'; ellipse(g, -0.5, hy + 4, 1.8, 1.2); ellipse(g, 7.6, hy + 4, 1.8, 1.2);
+  const mx = 4.2, my = hy + 4.6;
+  if (mood === 'cheer') { g.fillStyle = '#8a2040'; g.beginPath(); g.arc(mx, my - 0.6, 2.2, 0, Math.PI); g.fill(); }
+  else if (mood === 'worried') { g.fillStyle = '#8a2040'; ellipse(g, mx, my + 0.4, 1.1, 1.3); }
+  else if (mood === 'yawn') { g.fillStyle = '#8a2040'; ellipse(g, mx, my + 0.6, 1.8, 2.6); }
+  else if (mood === 'kiss') { g.fillStyle = '#d0406a'; circle(g, mx + 1, my, 1.4); }
+  else { g.beginPath(); g.arc(mx, my - 1.2, 1.9, Math.PI * 0.2, Math.PI * 0.8); g.stroke(); }
+  g.restore();
+}
+/** Birdcage on a long chain (sways). The princess is drawn inside while she's still caged. */
+function drawCage(pr, t) {
+  const c = pr.cage, g = ctx, hw = c.w / 2, ringY = c.ring, top = ringY + 7, barTop = top + 20, base = barTop + 44;
+  g.save(); g.translate(c.cx, c.anchorY); g.rotate(c.sway);
+  g.lineCap = 'round';
+  for (let y = 0, i = 0; y < ringY - 2; y += 8, i++) {
+    if (i % 2 === 0) { g.strokeStyle = '#8e8aa4'; g.lineWidth = 2; g.beginPath(); g.ellipse(0, y + 4, 2.6, 5, 0, 0, Math.PI * 2); g.stroke(); }
+    else { g.strokeStyle = '#6a6680'; g.lineWidth = 2.6; g.beginPath(); g.moveTo(0, y + 1); g.lineTo(0, y + 7); g.stroke(); }
+  }
+  g.strokeStyle = '#d8b050'; g.lineWidth = 2.4; g.beginPath(); g.arc(0, ringY + 3, 4, 0, Math.PI * 2); g.stroke();
+  g.beginPath(); g.moveTo(-hw, base); g.lineTo(-hw, barTop); g.bezierCurveTo(-hw, top - 4, hw, top - 4, hw, barTop); g.lineTo(hw, base); g.closePath();
+  g.fillStyle = 'rgba(30,14,44,0.45)'; g.fill();
+  if (pr.state === 'caged' || pr.state === 'opening') drawPrincess(0, base - 1, t, { face: pr.face, mood: pr.mood });
+  g.strokeStyle = '#d0a848'; g.lineWidth = 2;
+  const N = 7;
+  for (let i = 0; i <= N; i++) {
+    const bx = -hw + i * c.w / N;
+    g.beginPath(); g.moveTo(bx, barTop); g.quadraticCurveTo(bx, top + 2, 0, top); g.stroke();   // dome ribs
+    if (Math.abs(bx) > 9) { g.beginPath(); g.moveTo(bx, base); g.lineTo(bx, barTop); g.stroke(); }
+  }
+  g.lineWidth = 2.4; g.beginPath(); g.moveTo(-hw, barTop); g.lineTo(hw, barTop); g.stroke();
+  // the door, hinged on the left; swings open towards us
+  const d = c.door, x0 = -9, x1 = 9 - 33 * d, sk = 4 * d;
+  g.lineWidth = 1.8;
+  g.beginPath(); g.moveTo(x0, barTop + 2); g.lineTo(x1, barTop + 2 - sk); g.moveTo(x0, base - 2); g.lineTo(x1, base - 2 + sk); g.stroke();
+  for (let k = 0; k <= 3; k++) { const bx = lerp(x0, x1, k / 3), e = sk * k / 3; g.beginPath(); g.moveTo(bx, barTop + 2 - e); g.lineTo(bx, base - 2 + e); g.stroke(); }
+  if (d === 0) { g.fillStyle = '#d8b050'; rrect(g, 6, (barTop + base) / 2 - 3, 7, 7, 1.5); g.fill(); g.strokeStyle = '#d8b050'; g.lineWidth = 1.4; g.beginPath(); g.arc(9.5, (barTop + base) / 2 - 3, 2.4, Math.PI, 0); g.stroke(); }
+  g.fillStyle = '#5a4020'; rrect(g, -hw - 3, base - 1, c.w + 6, 7, 3); g.fill();
+  g.fillStyle = '#d0a848'; g.fillRect(-hw - 3, base - 1, c.w + 6, 2); circle(g, 0, base + 9, 2.5);
+  g.restore();
+}
+function drawHeart(x, y, s, a) {
+  ctx.save(); ctx.globalAlpha = a; ctx.translate(x, y); ctx.scale(s, s);
+  ctx.fillStyle = '#ff5a8a'; ctx.strokeStyle = '#7a1838'; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(0, 6); ctx.bezierCurveTo(-11, -2, -7, -12, 0, -5); ctx.bezierCurveTo(7, -12, 11, -2, 0, 6); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.7)'; ellipse(ctx, -4, -4, 2, 1.4);
+  ctx.restore();
+}
+/** Princess outside the cage (descending / landed / walking), in world space. */
+function drawPrincessFree(pr, t) {
+  const sway = pr.state === 'float' ? Math.sin(t * 2.2) : 0;
+  const moving = pr.state === 'walk' && Math.abs(pr.vx) > 10;
+  const bob = moving ? Math.abs(Math.sin(pr.walkT)) * 1.5 : 0;
+  drawPrincess(pr.x + pr.w / 2 + sway * 6, pr.y + pr.h - bob, t, { face: pr.face, mood: pr.puff > 0.5 ? 'cheer' : pr.mood, puff: pr.puff, lean: pr.lean, rot: sway * 0.12 });
 }
 function drawSnap(e, t) {
   const cx = e.x + e.w / 2, by = e.y + e.h;
@@ -2232,7 +2564,9 @@ function drawBoss(b, t) {
 function drawSpeech() {
   for (const s of G.speech) {
     const e = s.ent;
-    const x = e.x + e.w / 2, y = e.type === 'droop' && (e.state === 'hang' || e.state === 'shake') ? e.y + e.h + 56 : e.y - (e.type === 'boss' ? 26 : 10);
+    const caged = e.type === 'princess' && (e.state === 'caged' || e.state === 'opening');
+    const x = e.x + e.w / 2, y = caged ? e.y + e.h + 40 : e.type === 'princess' ? e.y - 14 - e.puff * 48 : e === G.player ? e.y - 30
+      : e.type === 'droop' && (e.state === 'hang' || e.state === 'shake') ? e.y + e.h + 56 : e.y - (e.type === 'boss' ? 26 : 10);
     ctx.font = `bold 12px ${FONT}`;
     const tw = ctx.measureText(s.str).width + 14;
     ctx.globalAlpha = Math.min(1, s.life * 3);
@@ -2399,10 +2733,13 @@ function drawOverlayText() {
     ctx.globalAlpha = clamp(G.clearT * 2, 0, 1);
     panel(W / 2 - 230, 120, 460, 170);
     text(ctx, 'LEVEL CLEARED!', W / 2, 160, { size: 30, align: 'center', font: TFONT, color: '#ffd9a0' });
-    text(ctx, L.def.clear || 'Old Smolder is sulking. Victory smells faintly of smoke.', W / 2, 190, { size: 15, align: 'center', weight: 'italic', color: '#e6d4ff' });
+    text(ctx, L.hasBoss && G.rescued ? 'Princess rescued. (She brought her own parachute.)' : L.def.clear || 'Old Smolder is sulking. Victory smells faintly of smoke.', W / 2, 190, { size: 15, align: 'center', weight: 'italic', color: '#e6d4ff' });
     text(ctx, `Embers: ${G.embers}    Socks: ${G.levelSocks}/${L.socks.length}    Score: ${G.score}`, W / 2, 226, { size: 15, align: 'center', color: '#f0e4ff' });
     if (G.clearT > 1) text(ctx, G.touchMode ? 'Tap to continue' : 'Press jump to continue', W / 2, 262, { size: 13, align: 'center', color: '#ffb35a' });
     ctx.globalAlpha = 1;
+  }
+  if (G.state === 'cutscene' && G.cut && G.cut.t > CUT.skipAfter && !G.paused) {
+    text(ctx, G.touchMode ? 'Tap to skip' : 'Press jump to skip', W / 2, H - 12, { size: 12, align: 'center', color: 'rgba(255,230,190,0.75)', weight: 'normal', outline: '#140820', outlineW: 3 });
   }
   if (G.paused) { // the PAUSED / restart panel itself is a DOM overlay (#menu) so it can take taps & clicks
     ctx.fillStyle = 'rgba(8,3,18,0.6)'; ctx.fillRect(0, 0, W, H);
@@ -2423,8 +2760,10 @@ function drawVictory() {
   const lg = ctx.createRadialGradient(300, 370, 0, 300, 370, 140);
   lg.addColorStop(0, 'rgba(255,180,80,0.35)'); lg.addColorStop(1, 'rgba(255,140,40,0)');
   ctx.fillStyle = lg; ctx.fillRect(150, 230, 300, 218);
-  const hero = { x: 280, y: 360, w: PW, h: PH, face: 1, vx: 0, onGround: true, walkT: 0, squash: 1, invuln: 0 };
-  scaled(290, 388, 1.8, () => drawHero(hero, G.time));
+  const hero = { x: 270, y: 360, w: PW, h: PH, face: 1, vx: 0, onGround: true, walkT: 0, squash: 1, invuln: 0, blush: true };
+  scaled(280, 388, 1.8, () => drawHero(hero, G.time));
+  scaled(334, 388, 1.8, () => drawPrincess(334, 388, G.time, { face: -1, mood: 'happy' }));
+  drawHeart(307, 300 + Math.sin(G.time * 2.5) * 4, 1.1 + Math.sin(G.time * 5) * 0.06, 0.95);
   // Old Smolder, defeated but dignified, practising his new toast career
   const boss = { x: 470, y: 308, w: 100, h: 80, face: -1, state: 'intro', t: G.time, hp: 0, decor: true };
   drawBoss(boss, G.time);
@@ -2434,11 +2773,12 @@ function drawVictory() {
   drawParticles();
   panel(W / 2 - 310, 30, 620, 236);
   text(ctx, 'YOU MADE IT HOME!', W / 2, 80, { size: 40, align: 'center', font: TFONT, color: '#ffd9a0', outline: '#2a0f1e', outlineW: 6 });
-  text(ctx, `Old Smolder: stomped.  Lost socks: ${G.socks}/${LEVELS.length * 3}.  Heroic face-plants: ${G.stats.deaths}.`, W / 2, 118, { size: 14, align: 'center', color: '#f0e4ff' });
-  text(ctx, 'Old Smolder has retired to a quiet career in artisanal toast.', W / 2, 152, { size: 17, align: 'center', weight: 'italic', font: TFONT, color: '#e6d4ff' });
-  text(ctx, G.socks >= LEVELS.length * 3 ? 'And every sock is home too. None of them match. Perfect.' : 'Somewhere out there, a lonely sock still waits for you.', W / 2, 178, { size: 14, align: 'center', weight: 'italic', font: TFONT, color: '#cbbbe6' });
-  text(ctx, `FINAL SCORE: ${G.score}`, W / 2, 216, { size: 20, align: 'center', color: '#ffb35a' });
-  if (G.overT > 1) text(ctx, 'THE END (probably)  \u2022  ' + (G.touchMode ? 'tap' : 'press jump') + ' for the title screen', W / 2, 246, { size: 12, align: 'center', color: '#cbbbe6', weight: 'normal' });
+  text(ctx, `Old Smolder: ${G.bossHow === 'balloon' ? 'soaked' : 'stomped'}.  Princess: rescued.  Lost socks: ${G.socks}/${LEVELS.length * 3}.  Face-plants: ${G.stats.deaths}.`, W / 2, 112, { size: 13, align: 'center', color: '#f0e4ff' });
+  text(ctx, 'Old Smolder now makes artisanal toast. He\'s catering the wedding.', W / 2, 144, { size: 17, align: 'center', weight: 'italic', font: TFONT, color: '#e6d4ff' });
+  text(ctx, 'The princess has moved in. She says the lantern can stay.', W / 2, 168, { size: 14, align: 'center', weight: 'italic', font: TFONT, color: '#ffd0e8' });
+  text(ctx, G.socks >= LEVELS.length * 3 ? 'And every sock is home too. None of them match. Perfect.' : 'Somewhere out there, a lonely sock still waits for you.', W / 2, 192, { size: 13, align: 'center', weight: 'italic', font: TFONT, color: '#cbbbe6' });
+  text(ctx, `FINAL SCORE: ${G.score}`, W / 2, 222, { size: 20, align: 'center', color: '#ffb35a' });
+  if (G.overT > 1) text(ctx, 'THE END (happily ever after, probably)  \u2022  ' + (G.touchMode ? 'tap' : 'press jump') + ' for the title screen', W / 2, 248, { size: 12, align: 'center', color: '#cbbbe6', weight: 'normal' });
 }
 
 function render() {
@@ -2453,6 +2793,8 @@ function render() {
   drawTiles(L, G.cam.x);
   for (const cp of L.checkpoints) drawCheckpoint(cp);
   drawGoal(L);
+  const pr = G.princess;
+  if (pr && pr.cage.cx > G.cam.x - 120 && pr.cage.cx < G.cam.x + W + 120) drawCage(pr, G.time);
   for (const j of L.jets) if (j.x > G.cam.x - 64 && j.x < G.cam.x + W + 64) drawJet(j);
   for (const e of L.embers) if (!e.taken) drawEmber(e);
   for (const s of L.socks) if (!s.taken) drawSock(s);
@@ -2467,8 +2809,13 @@ function render() {
   for (const b of G.balloons) drawBalloon(b.x, b.y, b.t, Math.sign(b.vx) || 1);
   if (G.state !== 'clear' || G.clearT < 0.6) {
     if (G.state === 'clear') ctx.globalAlpha = 1 - G.clearT / 0.6;
+    if (pr && pr.state !== 'caged' && pr.state !== 'opening') drawPrincessFree(pr, G.time);
     drawHero(p, G.time);
     ctx.globalAlpha = 1;
+  }
+  if (G.cut && G.cut.heart) { // the kiss: a heart pops up between them
+    const h = G.cut.heart, k = h.t, sc = k < 0.18 ? (k / 0.18) * 1.6 : Math.max(1.2, 1.6 - (k - 0.18) * 2);
+    drawHeart(h.x, h.y - Math.min(k, 2.5) * 7, sc, k < 2.2 ? 1 : Math.max(0, 1 - (k - 2.2) * 2));
   }
   if (G.helmet) {
     ctx.save(); ctx.translate(G.helmet.x, G.helmet.y); ctx.rotate(G.helmet.rot); ctx.scale(p.face, 1);
@@ -2540,7 +2887,7 @@ function updateRotateOverlay() {
   rotateEl.classList.toggle('on', show);
   if (show && !G.rotateLock) {
     G.rotateLock = true;
-    if ((G.state === 'playing' || G.state === 'dying') && !G.paused) { G.paused = true; G.pausedByRotate = true; }
+    if ((G.state === 'playing' || G.state === 'dying' || G.state === 'cutscene') && !G.paused) { G.paused = true; G.pausedByRotate = true; }
     Input.keys.left = Input.keys.right = Input.keys.jump = Input.keys.throw = false;
     Input.touch = { left: false, right: false, jump: false, throw: false }; Input.jumpQueued = false; Input.throwQueued = false;
     document.querySelectorAll('.tbtn.down').forEach((b) => b.classList.remove('down'));
